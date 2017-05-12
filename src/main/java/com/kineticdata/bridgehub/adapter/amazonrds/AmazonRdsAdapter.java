@@ -18,8 +18,6 @@ import java.util.Map;
 import java.util.TimeZone;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
-import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -52,8 +50,18 @@ public class AmazonRdsAdapter implements BridgeAdapter {
      * PROPERTIES
      *--------------------------------------------------------------------------------------------*/
     
+    public static final List<String> VALID_STRUCTURES = Arrays.asList(new String[] {
+       "DBInstances"
+    });
+    
     /** Defines the adapter display name */
     public static final String NAME = "Amazon RDS Bridge";
+    
+    private static final DateFormat DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+    
+    private static final String FREE_STORAGE_SPACE = "FreeStorageSpace";
+    
+//    private static final String[] STRING_ARRAY = {"foo", "bar", "baz"};
     
     /** Defines the logger */
     protected static final org.slf4j.Logger logger = LoggerFactory.getLogger(AmazonRdsAdapter.class);
@@ -120,13 +128,66 @@ public class AmazonRdsAdapter implements BridgeAdapter {
     public ConfigurablePropertyMap getProperties() {
         return properties;
     }
+    //retrieve helper methods 
+    private String getTimeCurrentTime(){
+        Date date = new Date();
+        String currentTime = DATE_FORMAT.format(date).replace(" ", "T") + "Z";
     
+        return currentTime;
+    }  
+    private String getTimeCurrentTMinusTime(){
+        Date oldDate = new Date(System.currentTimeMillis()-5*60*1000);
+        String tMinusFiveMins = DATE_FORMAT.format(oldDate).replace(" ", "T") + "Z";
+
+        return tMinusFiveMins;
+    }
+    
+    private Map<String,Object> getFreeStorageSpace(String query, List<String>headers)throws BridgeError{
+        
+        String currentTime = getTimeCurrentTime();
+        String tMinusFiveMins = getTimeCurrentTMinusTime();
+       // Make the request using the built up url/headers and bridge properties retrieve
+       HttpResponse response = request("GET","https://monitoring.us-east-1.amazonaws.com/?Action=GetMetricStatistics&Version=2010-08-01&Dimensions.member.1.Name=DBInstanceIdentifier&Dimensions.member.1.Value=" + query + "&Statistics.member.1=Minimum&Unit=Bytes&StartTime=" + tMinusFiveMins +"&EndTime=" + currentTime + "&Period=240&Namespace=AWS/RDS&MetricName=FreeStorageSpace&",headers,this.region,"monitoring","",this.accessKey,this.secretKey);
+       String output;
+
+       try {
+           output = EntityUtils.toString(response.getEntity());
+       } catch (IOException e) { throw new BridgeError(e); }
+
+       JSONObject jsonOutput = XML.toJSONObject(output);
+       JSONArray outputArray = (JSONArray)jsonOutput.getJSONObject("GetMetricStatisticsResponse").getJSONObject("GetMetricStatisticsResult").getJSONObject("Datapoints").getJSONArray("member");
+        if (outputArray == null) {
+            throw new BridgeError("The 'Fields' input requires at lease one entry.");
+        } else {
+                JSONObject jsonObject = outputArray.getJSONObject(0);
+                return (Map<String, Object>)JSONValue.parse(jsonObject.toString());
+        }
+    }
+    private JSONObject getDBObject(String query, List<String>headers)throws BridgeError{
+         // Make the request using the built up url/headers and bridge properties retrieve
+                HttpResponse response = request("GET","https://rds.us-east-1.amazonaws.com/?Action=DescribeDBInstances&Version=2014-10-31&DBInstanceIdentifier=" + query,headers,this.region,"rds","",this.accessKey,this.secretKey);
+                String output;
+
+                try {
+                    output = EntityUtils.toString(response.getEntity());
+                } catch (IOException e) { throw new BridgeError(e); }
+
+                JSONObject jsonOutput = XML.toJSONObject(output);                
+                JSONObject outputArray = (JSONObject)jsonOutput.getJSONObject("DescribeDBInstancesResponse").getJSONObject("DescribeDBInstancesResult").getJSONObject("DBInstances").getJSONObject("DBInstance");
+                return outputArray;         
+    }
+    
+
     /*---------------------------------------------------------------------------------------------
      * IMPLEMENTATION METHODS
      *-------------------------------------------------------------------------------------------*/
 
     @Override
     public Count count(BridgeRequest request) throws BridgeError {
+         if (!VALID_STRUCTURES.contains(request.getStructure())) {
+            throw new BridgeError("Invalid Structure: '" + request.getStructure() + "' is not a valid structure");
+        }
+        
         String structure = request.getStructure();
         
         AmazonRdsQualificationParser parser = new AmazonRdsQualificationParser();
@@ -134,11 +195,9 @@ public class AmazonRdsAdapter implements BridgeAdapter {
         
         // The headers that we want to add to the request
         List<String> headers = new ArrayList<String>();
-        headers.add("Content-Type: application/x-amz-json-1.1");
-        headers.add("x-amz-target: AmazonEC2ContainerServiceV20141113."+structure);
         
         // Make the request using the built up url/headers and bridge properties count 
-        HttpResponse response = request("GET","https://rds.us-east-1.amazonaws.com?Action=DescribeDBInstances&Version=2014-10-31&" + query,headers,this.region,"rds","",this.accessKey,this.secretKey);
+        HttpResponse response = request("GET","https://rds." + this.region + ".amazonaws.com?Action=DescribeDBInstances&Version=2014-10-31&" + query,headers,this.region,"rds","",this.accessKey,this.secretKey);
         String output;
         
         try {
@@ -147,144 +206,86 @@ public class AmazonRdsAdapter implements BridgeAdapter {
         
         JSONObject jsonOutput = XML.toJSONObject(output);
         JSONArray outputArray = (JSONArray) jsonOutput.getJSONObject("DescribeDBInstancesResponse").getJSONObject("DescribeDBInstancesResult").getJSONObject("DBInstances").getJSONArray("DBInstance");
-        Long count;
-        count = Long.valueOf(outputArray.length());
-        return new Count(count);
+        return new Count(outputArray.length());
     }
 
     @Override
     public Record retrieve(BridgeRequest request) throws BridgeError {
+        if (!VALID_STRUCTURES.contains(request.getStructure())) {
+            throw new BridgeError("Invalid Structure: '" + request.getStructure() + "' is not a valid structure");
+        }
+        
         List<String> fields = request.getFields();
         String structure = request.getStructure();
  
         AmazonRdsQualificationParser parser = new AmazonRdsQualificationParser();
         String query = parser.parse(request.getQuery(),request.getParameters());
+       // The headers that we want to add to the request
+        List<String> headers = new ArrayList<String>();
         
-        // Build up the request query into a JSON object
-        Map<String,Object> jsonQuery = new HashMap<String,Object>();
-        if (query != null && !query.isEmpty()) {
-            for (String part : query.split("&")) {
-                String[] keyValue = part.split("=");
-                String key = keyValue[0].trim();
-                String value = keyValue[1].trim();
-                // If the value is surrounded by [ ] it should be turned into a string list
-                if (value.startsWith("[") && value.endsWith("]")) {
-                    jsonQuery.put(key,Arrays.asList(value.substring(1,value.length()-1).split(",")));
-                } else {
-                    jsonQuery.put(key,value);
-                }
-            }
-        }
         Record record = null;
-        for(String str: fields){
-        if (str.contains("FreeStorageSpace")){
-             // The headers that we want to add to the request
-            List<String> headers = new ArrayList<String>();
-//            headers.add("Content-Type: application/x-amz-json-1.1");
-//            headers.add("x-amz-target: AmazonEC2ContainerServiceV20141113."+request.getStructure());
-
-            //Logic for getting timestamps 
-            DateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
-            Date date = new Date();
-            String currentTime = dateFormat.format(date).replace(" ", "T") + "Z";
-            Date oldDate = new Date(System.currentTimeMillis()-5*60*1000);
-            String tMinusFiveMins = dateFormat.format(oldDate).replace(" ", "T") + "Z";
-            
-            
-            // Make the request using the built up url/headers and bridge properties retrieve
-            HttpResponse response = request("GET","https://monitoring.us-east-1.amazonaws.com/?Action=GetMetricStatistics&Version=2010-08-01&Dimensions.member.1.Name=DBInstanceIdentifier&" + query + "&Statistics.member.1=Minimum&Unit=Bytes&StartTime=" + tMinusFiveMins +"&EndTime=" + currentTime + "&Period=240&Namespace=AWS/RDS&MetricName=FreeStorageSpace&",headers,this.region,"monitoring","",this.accessKey,this.secretKey);
-            String output;
-            
-            try {
-                output = EntityUtils.toString(response.getEntity());
-            } catch (IOException e) { throw new BridgeError(e); }
-            
-            JSONObject jsonOutput = XML.toJSONObject(output);
-            JSONArray outputArray = (JSONArray)jsonOutput.getJSONObject("GetMetricStatisticsResponse").getJSONObject("GetMetricStatisticsResult").getJSONObject("Datapoints").getJSONArray("member");
-            if (outputArray == null) {
-                throw new BridgeError("The 'Fields' input requires at lease one entry.");
-            } else {
-                    Map<String,Object> recordMap = new LinkedHashMap<String,Object>();
-                    JSONObject jsonObject = outputArray.getJSONObject(0);
-                    org.json.simple.JSONObject map = (org.json.simple.JSONObject)JSONValue.parse(jsonObject.toString());
-                    record = new Record(map);
-            }
+        Map<String,Object> recordMap = new HashMap<String,Object>();
+        if (recordMap.size() > 1) {
+            throw new BridgeError("Multiple results matched an expected single match query");
+        }else if (recordMap.isEmpty()) {
+            record = new Record(null);
+        }
+        if (fields == null) {
+            throw new BridgeError("The 'Fields' input requires at lease one entry.");
+        }
+        else if ("".equals(query)) {
+            throw new BridgeError("The 'Qualification' input requires an entry.");    
         } else {
-           // The headers that we want to add to the request
-            List<String> headers = new ArrayList<String>();
-            headers.add("Content-Type: application/x-amz-json-1.1");
-           // headers.add("x-amz-target: AmazonEC2ContainerServiceV20141113."+request.getStructure());
-
-            // Make the request using the built up url/headers and bridge properties retrieve
-            HttpResponse response = request("GET","https://rds.us-east-1.amazonaws.com/?Action=DescribeDBInstances&Version=2014-10-31&" + query,headers,this.region,"rds","",this.accessKey,this.secretKey);
-            String output;
-
-            try {
-                output = EntityUtils.toString(response.getEntity());
-            } catch (IOException e) { throw new BridgeError(e); }
-
-            JSONObject jsonOutput = XML.toJSONObject(output);
-            JSONObject outputArray = (JSONObject)jsonOutput.getJSONObject("DescribeDBInstancesResponse").getJSONObject("DescribeDBInstancesResult").getJSONObject("DBInstances").getJSONObject("DBInstance");
-
-            
-
-            if (outputArray == null) {
-                throw new BridgeError("The 'Fields' input requires at lease one entry.");
-            } else {
-                JSONObject result = outputArray;
-                Map<String,Object> recordMap = new LinkedHashMap<String,Object>();
-                if (fields == null) {
-                    record = new Record(null);
-                } else {
-                    for (String field: fields) {
-                        recordMap.put(field, result.getString(field));
-                    }
-                    record = new Record(recordMap);
-                }
+            if (fields.contains(FREE_STORAGE_SPACE)){
+                Map<String,Object> freeStorageSpace = getFreeStorageSpace(query,headers);
+                recordMap.putAll(freeStorageSpace);
+                fields.remove(FREE_STORAGE_SPACE);
+            } 
+            if (!fields.isEmpty()){
+                 JSONObject dbObject = getDBObject(query,headers);
+                 for (String field: fields){
+                     if (dbObject.has(field)){
+                         recordMap.put(field, dbObject.get(field));
+                     } 
+                 }
             }
-            
         }
-        }
-        return record;
+        return new Record(recordMap);
     }
-
+    
     @Override
     public RecordList search(BridgeRequest request) throws BridgeError {
+        if (!VALID_STRUCTURES.contains(request.getStructure())) {
+            throw new BridgeError("Invalid Structure: '" + request.getStructure() + "' is not a valid structure");
+        }
         String structure = request.getStructure();
 
         AmazonRdsQualificationParser parser = new AmazonRdsQualificationParser();
         String query = parser.parse(request.getQuery(),request.getParameters());
-        
-        // Build up the request query into a JSON object
-        Map<String,Object> jsonQuery = new HashMap<String,Object>();
-        if (query != null && !query.isEmpty()) {
-            for (String part : query.split("&")) {
-                String[] keyValue = part.split("=");
-                String key = keyValue[0].trim();
-                String value = keyValue[1].trim();
-                // If the value is surrounded by [ ] it should be turned into a string list
-                if (value.startsWith("[") && value.endsWith("]")) {
-                    jsonQuery.put(key,Arrays.asList(value.substring(1,value.length()-1).split(",")));
-                } else {
-                    jsonQuery.put(key,value);
-                }
-            }
-        }
-    
+
         // The headers that we want to add to the request
         List<String> headers = new ArrayList<String>();
-//        headers.add("Content-Type: application/x-amz-json-1.1");
-//        headers.add("x-amz-target: AmazonEC2ContainerServiceV20141113."+structure);
         
         // Make the request using the built up url/headers and bridge properties search
-        HttpResponse response = request("GET","https://rds.us-east-1.amazonaws.com?Action=DescribeDBInstances&Version=2014-10-31",headers,this.region,"rds","",this.accessKey,this.secretKey);
+        HttpResponse response = request("GET","https://rds." + this.region + ".amazonaws.com?Action=DescribeDBInstances&Version=2014-10-31&"+query,headers,this.region,"rds","",this.accessKey,this.secretKey);
         String output;
+        
         try {
             output = EntityUtils.toString(response.getEntity());
         } catch (IOException e) { throw new BridgeError(e); }
         
         JSONObject jsonOutput = XML.toJSONObject(output);
-        JSONArray outputArray = (JSONArray) jsonOutput.getJSONObject("DescribeDBInstancesResponse").getJSONObject("DescribeDBInstancesResult").getJSONObject("DBInstances").getJSONArray("DBInstance");
+        Object object = jsonOutput.getJSONObject("DescribeDBInstancesResponse").getJSONObject("DescribeDBInstancesResult").getJSONObject("DBInstances").get("DBInstance");
+        
+        JSONArray outputArray;
+        if (object instanceof JSONArray) {
+            outputArray = (JSONArray)object;
+        } else if(object instanceof JSONObject){
+        outputArray = new JSONArray();
+        outputArray.put((JSONObject)object);
+        } else {
+            outputArray = new JSONArray();
+        }
         
         List<Record> records = new ArrayList<Record>();
         List<String> fields = request.getFields();
@@ -293,7 +294,11 @@ public class AmazonRdsAdapter implements BridgeAdapter {
                             JSONObject dbInstance = outputArray.getJSONObject(i);
                             Map<String,Object> recordObj = new HashMap<String,Object>();
                             for (String field : request.getFields()) {
-                            recordObj.put(field,dbInstance.getString(field));
+                                if (!dbInstance.has(field)){
+                                        throw new BridgeError("Invalid Field: '" + field + "' is not a valid field");
+                                }else{
+                                    recordObj.put(field,dbInstance.get(field));
+                                }
                             }
                             records.add(new Record(recordObj));
             }
