@@ -37,7 +37,7 @@ import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.methods.HttpPost;
 import org.apache.http.client.methods.HttpRequestBase;
 import org.apache.http.entity.StringEntity;
-import org.apache.http.impl.client.DefaultHttpClient;
+import org.apache.http.impl.client.HttpClients;
 import org.apache.http.util.EntityUtils;
 import org.json.XML;
 import org.json.simple.JSONValue;
@@ -48,17 +48,17 @@ import org.json.JSONObject;
 
 
 public class AmazonRdsAdapter implements BridgeAdapter {
-    
+
     /*----------------------------------------------------------------------------------------------
      * PROPERTIES
      *--------------------------------------------------------------------------------------------*/
-    
+
     /** Defines the adapter display name */
     public static final String NAME = "Amazon RDS Bridge";
-  
+
     /** Defines the logger */
     protected static final org.slf4j.Logger logger = LoggerFactory.getLogger(AmazonRdsAdapter.class);
-    
+
     /** Adapter version constant. */
     public static String VERSION;
     /** Load the properties version from the version.properties file. */
@@ -79,17 +79,17 @@ public class AmazonRdsAdapter implements BridgeAdapter {
         public static final String SECRET_KEY = "Secret Key";
         public static final String REGION = "Region";
     }
-    
+
     private final ConfigurablePropertyMap properties = new ConfigurablePropertyMap(
         new ConfigurableProperty(Properties.ACCESS_KEY).setIsRequired(true),
         new ConfigurableProperty(Properties.SECRET_KEY).setIsRequired(true).setIsSensitive(true),
         new ConfigurableProperty(Properties.REGION).setIsRequired(true)
     );
-    
+
     private String accessKey;
     private String secretKey;
     private String region;
-    
+
     /*---------------------------------------------------------------------------------------------
      * SETUP METHODS
      *-------------------------------------------------------------------------------------------*/
@@ -100,33 +100,33 @@ public class AmazonRdsAdapter implements BridgeAdapter {
         this.secretKey = properties.getValue(Properties.SECRET_KEY);
         this.region = properties.getValue(Properties.REGION);
     }
-    
+
     @Override
     public String getName() {
         return NAME;
     }
-    
+
     @Override
     public String getVersion() {
         return VERSION;
     }
-    
+
     @Override
     public void setProperties(Map<String,String> parameters) {
         properties.setValues(parameters);
     }
-    
+
     @Override
     public ConfigurablePropertyMap getProperties() {
         return properties;
     }
-    
+
     private static final Pattern NESTED_FIELD = Pattern.compile("(.*?)\\[.*\\]");
     private static final String FREE_STORAGE_SPACE = "FreeStorageSpace";
     public static final List<String> VALID_STRUCTURES = Arrays.asList(new String[] {
        "DBInstances"
     });
-    
+
     /*---------------------------------------------------------------------------------------------
      * IMPLEMENTATION METHODS
      *-------------------------------------------------------------------------------------------*/
@@ -136,28 +136,28 @@ public class AmazonRdsAdapter implements BridgeAdapter {
          if (!VALID_STRUCTURES.contains(request.getStructure())) {
             throw new BridgeError("Invalid Structure: '" + request.getStructure() + "' is not a valid structure");
         }
-        
+
         AmazonRdsQualificationParser parser = new AmazonRdsQualificationParser();
         String query = parser.parse(request.getQuery(),request.getParameters());
-        
+
         // The headers that we want to add to the request
         List<String> headers = new ArrayList<String>();
-        
-        // Make the request using the built up url/headers and bridge properties count 
+
+        // Make the request using the built up url/headers and bridge properties count
         HttpResponse response = request("GET","https://rds." + this.region + ".amazonaws.com?Action=DescribeDBInstances&Version=2014-10-31&" + query,headers,this.region,"rds","",this.accessKey,this.secretKey);
         String output;
-        
+
         try {
             output = EntityUtils.toString(response.getEntity());
         } catch (IOException e) { throw new BridgeError(e); }
-        
+
         JSONObject jsonOutput = XML.toJSONObject(output);
         Object object = jsonOutput.getJSONObject("DescribeDBInstancesResponse").getJSONObject("DescribeDBInstancesResult").getJSONObject("DBInstances").get("DBInstance");
-        
+
         int count = 0;
         if (object instanceof JSONObject) { count = 1; }
         else if (object instanceof JSONArray) { count = ((JSONArray)object).length(); }
-        
+
         return new Count(count);
     }
 
@@ -165,21 +165,21 @@ public class AmazonRdsAdapter implements BridgeAdapter {
     public Record retrieve(BridgeRequest request) throws BridgeError {
         List<String> fields = request.getFields();
         if (fields == null) throw new BridgeError("'Fields' cannot be left blank");
-        
+
         if (!VALID_STRUCTURES.contains(request.getStructure())) {
             throw new BridgeError("Invalid Structure: '" + request.getStructure() + "' is not a valid structure");
         }
- 
+
         AmazonRdsQualificationParser parser = new AmazonRdsQualificationParser();
         String query = parser.parse(request.getQuery(),request.getParameters());
-        
+
        // The headers that we want to add to the request
         List<String> headers = new ArrayList<String>();
-        
+
         Matcher instanceMatcher = Pattern.compile("DBInstanceIdentifier=(.*?)(?:&|\\z)").matcher(query);
         if (!instanceMatcher.find()) throw new BridgeError("The query parameter 'DBInstanceIdentifier' is required and cannot be found.");
         String dbInstanceIdentifier = instanceMatcher.group(1);
-        
+
         Map<String,Object> recordMap = new HashMap<String,Object>();
 
         // Retrieve dbObject that matches the passed in DBInstanceIdentifier
@@ -204,15 +204,15 @@ public class AmazonRdsAdapter implements BridgeAdapter {
                 recordMap.put(field, dbObject.get(field));
             }
         }
-        
+
         return new Record(recordMap);
     }
-    
+
     @Override
     public RecordList search(BridgeRequest request) throws BridgeError {
         List<String> fields = request.getFields();
         if (fields == null) throw new BridgeError("'Fields' cannot be left blank");
-        
+
         if (!VALID_STRUCTURES.contains(request.getStructure())) {
             throw new BridgeError("Invalid Structure: '" + request.getStructure() + "' is not a valid structure");
         }
@@ -222,18 +222,18 @@ public class AmazonRdsAdapter implements BridgeAdapter {
 
         // The headers that we want to add to the request
         List<String> headers = new ArrayList<String>();
-        
+
         // Make the request using the built up url/headers and bridge properties search
         HttpResponse response = request("GET","https://rds." + this.region + ".amazonaws.com?Action=DescribeDBInstances&Version=2014-10-31&"+query,headers,this.region,"rds","",this.accessKey,this.secretKey);
         String output;
-        
+
         try {
             output = EntityUtils.toString(response.getEntity());
         } catch (IOException e) { throw new BridgeError(e); }
-        
+
         JSONObject jsonOutput = XML.toJSONObject(output);
         Object object = jsonOutput.getJSONObject("DescribeDBInstancesResponse").getJSONObject("DescribeDBInstancesResult").getJSONObject("DBInstances").get("DBInstance");
-        
+
         JSONArray outputArray;
         if (object instanceof JSONArray) {
             outputArray = (JSONArray)object;
@@ -243,7 +243,7 @@ public class AmazonRdsAdapter implements BridgeAdapter {
         } else {
             outputArray = new JSONArray();
         }
-        
+
         List<Record> records = new ArrayList<Record>();
         for (int i = 0; i < outputArray.length(); i++) {
             JSONObject dbInstance = outputArray.getJSONObject(i);
@@ -267,28 +267,28 @@ public class AmazonRdsAdapter implements BridgeAdapter {
         }
         records = BridgeUtils.getNestedFields(fields, records);
         return new RecordList(fields,records);
-           
+
     }
- 
+
     /*----------------------------------------------------------------------------------------------
      * HELPER METHODS
      *--------------------------------------------------------------------------------------------*/
-    
+
     private static final DateFormat DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'");
     private String getTimeCurrentTime(){
         Date date = new Date();
         String currentTime = DATE_FORMAT.format(date);
-    
+
         return currentTime;
     }
-    
+
     private String getTimeCurrentTMinusTime(){
         Date oldDate = new Date(System.currentTimeMillis()-5*60*1000);
         String tMinusFiveMins = DATE_FORMAT.format(oldDate);
 
         return tMinusFiveMins;
     }
-    
+
     private Map<String,Object> getFreeStorageSpace(String query, List<String>headers)throws BridgeError{
         String currentTime = getTimeCurrentTime();
         String tMinusFiveMins = getTimeCurrentTMinusTime();
@@ -309,7 +309,7 @@ public class AmazonRdsAdapter implements BridgeAdapter {
                 return (Map<String, Object>)JSONValue.parse(jsonObject.toString());
         }
     }
-    
+
     private JSONObject getDBObject(String query, List<String>headers)throws BridgeError{
         // Make the request using the built up url/headers and bridge properties retrieve
         HttpResponse response = request("GET","https://rds."+this.region+".amazonaws.com/?Action=DescribeDBInstances&Version=2014-10-31&DBInstanceIdentifier=" + query,headers,this.region,"rds","",this.accessKey,this.secretKey);
@@ -319,25 +319,25 @@ public class AmazonRdsAdapter implements BridgeAdapter {
             output = EntityUtils.toString(response.getEntity());
         } catch (IOException e) { throw new BridgeError(e); }
 
-        JSONObject jsonOutput = XML.toJSONObject(output);                
+        JSONObject jsonOutput = XML.toJSONObject(output);
         JSONObject outputArray = (JSONObject)jsonOutput.getJSONObject("DescribeDBInstancesResponse").getJSONObject("DescribeDBInstancesResult").getJSONObject("DBInstances").getJSONObject("DBInstance");
         return outputArray;
     }
-    
+
     /**
      * This method builds and sends a request to the Amazon EC2 REST API given the inputted
      * data and return a HttpResponse object after the call has returned. This method mainly helps with
      * creating a proper signature for the request (documentation on the Amazon REST API signing
      * process can be found here - http://docs.aws.amazon.com/general/latest/gr/sigv4_signing.html),
      * but it also throws and logs an error if a 401 or 403 is retrieved on the attempted call.
-     * 
+     *
      * @param url
      * @param headers
      * @param region
      * @param accessKey
      * @param secretKey
      * @return
-     * @throws BridgeError 
+     * @throws BridgeError
      */
     private HttpResponse request(String method, String url, List<String> headers, String region, String service, String payload, String accessKey, String secretKey) throws BridgeError {
         // Build a datetime timestamp of the current time (in UTC). This will be sent as a header
@@ -347,7 +347,7 @@ public class AmazonRdsAdapter implements BridgeAdapter {
         df.setTimeZone(TimeZone.getTimeZone("UTC"));
         String datetime = df.format(new Date());
         String date = datetime.split("T")[0];
-        
+
         // Create a URI from the request URL so that we can pull the host/path/query from it
         URI uri;
         try {
@@ -355,12 +355,12 @@ public class AmazonRdsAdapter implements BridgeAdapter {
         } catch (URISyntaxException e) {
             throw new BridgeError("There was an error parsing the inputted url '"+url+"' into a java URI.",e);
         }
-        
+
         /* BUILD CANONCIAL REQUEST (uri, query, headers, signed headers, hashed payload)*/
-        
+
         // Canonical URI (the part of the URL between the host and the ?. If blank, the uri is just /)
         String canonicalUri = uri.getPath().isEmpty() ? "/" : uri.getPath();
-        
+
         // Canonical Query (parameter names sorted by asc and param names and values escaped
         // and trimmed)
         String canonicalQuery;
@@ -371,14 +371,14 @@ public class AmazonRdsAdapter implements BridgeAdapter {
                 queryMap.put(parameter.split("=")[0].trim(), parameter.split("=")[1].trim());
             }
         }
-        
+
         StringBuilder queryBuilder = new StringBuilder();
         for (String key : new TreeSet<String>(queryMap.keySet())) {
             if (!queryBuilder.toString().isEmpty()) queryBuilder.append("&");
             queryBuilder.append(URLEncoder.encode(key)).append("=").append(URLEncoder.encode(queryMap.get(key)));
         }
         canonicalQuery = queryBuilder.toString();
-        
+
         // Canonical Headers (lowercase and sort headers, add host and date headers if they aren't
         // already included, then create a header string with trimmed name and values and a new line
         // character after each header - including the last one)
@@ -397,14 +397,14 @@ public class AmazonRdsAdapter implements BridgeAdapter {
             headerBuilder.append(key).append(":").append(headerMap.get(key)).append("\n");
         }
         canonicalHeaders = headerBuilder.toString();
-        
+
         // Signed Headers (a semicolon separated list of heads that were signed in the previous step)
         String signedHeaders = StringUtils.join(new TreeSet<String>(headerMap.keySet()),";");
-        
+
         // Hashed Payload (a SHA256 hexdigest with the request payload - because the bridge only
         // does GET requests the payload will always be an empty string)
         String hashedPayload = DigestUtils.sha256Hex(payload);
-        
+
         // Canonical Request (built out of 6 parts - the request method and the previous 5 steps in order
         // - with a newline in between each step and then a SHA256 hexdigest run on the resulting string)
         StringBuilder requestBuilder = new StringBuilder();
@@ -414,16 +414,16 @@ public class AmazonRdsAdapter implements BridgeAdapter {
         requestBuilder.append(canonicalHeaders).append("\n");
         requestBuilder.append(signedHeaders).append("\n");
         requestBuilder.append(hashedPayload);
-        
+
         logger.debug(requestBuilder.toString());
         // Run the resulting string through a SHA256 hexdigest
         String canonicalRequest = DigestUtils.sha256Hex(requestBuilder.toString());
-        
+
         /* BUILD STRING TO SIGN (credential scope, string to sign) */
-        
+
         // Credential Scope (date, region, service, and terminating string [which is always aws4_request)
         String credentialScope = String.format("%s/%s/%s/aws4_request",date,region,service);
-        
+
         // String to Sign (encryption method, datetime, credential scope, and canonical request)
         StringBuilder stringToSignBuilder = new StringBuilder();
         stringToSignBuilder.append("AWS4-HMAC-SHA256").append("\n");
@@ -432,9 +432,9 @@ public class AmazonRdsAdapter implements BridgeAdapter {
         stringToSignBuilder.append(canonicalRequest);
         logger.debug(stringToSignBuilder.toString());
         String stringToSign = stringToSignBuilder.toString();
-        
+
         /* CREATE THE SIGNATURE (signing key, signature) */
-        
+
         // Signing Key
         byte[] signingKey;
         try {
@@ -442,7 +442,7 @@ public class AmazonRdsAdapter implements BridgeAdapter {
         } catch (Exception e) {
             throw new BridgeError("There was a problem creating the signing key",e);
         }
-        
+
         // Signature
         String signature;
         try {
@@ -450,12 +450,12 @@ public class AmazonRdsAdapter implements BridgeAdapter {
         } catch (Exception e) {
             throw new BridgeError("There was a problem creating the signature",e);
         }
-        
+
         // Authorization Header (encryption method, access key, credential scope, signed headers, signature))
         String authorization = String.format("AWS4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s",accessKey,credentialScope,signedHeaders,signature);
-        
+
         /* CREATE THE HTTP REQUEST */
-        HttpClient client = new DefaultHttpClient();
+        HttpClient client = HttpClients.createDefault();
         HttpRequestBase request;
         try {
             if (method.toLowerCase().equals("get")) {
@@ -475,20 +475,20 @@ public class AmazonRdsAdapter implements BridgeAdapter {
 
             request.setHeader(header.getKey(),header.getValue());
         }
-        
+
         HttpResponse response;
         try {
             response = client.execute(request);
-            
+
             if (response.getStatusLine().getStatusCode() == 401 || response.getStatusLine().getStatusCode() == 403) {
                 logger.error(EntityUtils.toString(response.getEntity()));
                 throw new BridgeError("User not authorized to access this resource. Check the logs for more details.");
             }
         } catch (IOException e) { throw new BridgeError(e); }
-        
+
         return response;
     }
-    
+
     static byte[] HmacSHA256(byte[] key, String data) throws Exception {
         String algorithm = "HmacSHA256";
         Mac mac = Mac.getInstance(algorithm);
@@ -504,5 +504,5 @@ public class AmazonRdsAdapter implements BridgeAdapter {
          byte[] kSigning = HmacSHA256(kService, "aws4_request");
          return kSigning;
     }
- 
+
 }
